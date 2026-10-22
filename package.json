@@ -1,0 +1,20 @@
+{
+  "name": "dcbot-soundboard-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord native Soundboard observation with explicit coverage and durable event deduplication",
+  "engines": { "node": ">=24.17.0 <25" },
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.js",
+    "register": "node --env-file-if-exists=.env src/register.js",
+    "test": "node --test",
+    "check": "node scripts/check.js",
+    "demo": "node scripts/demo.js"
+  },
+  "dependencies": {
+    "discord.js": "14.27.0",
+    "@discordjs/voice": "0.19.2"
+  }
+}
