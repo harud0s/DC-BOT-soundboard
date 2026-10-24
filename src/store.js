@@ -83,9 +83,9 @@ export class Store {
       FROM plays p WHERE ${where}`).get(...args);
     const sounds = this.db.prepare(`SELECT p.sound_id, s.name, COUNT(*) AS count
       FROM plays p LEFT JOIN sounds s ON s.sound_id = p.sound_id WHERE ${where}
-      GROUP BY p.sound_id ORDER BY count DESC, p.sound_id LIMIT 10`).all(...args);
+      GROUP BY p.sound_id ORDER BY count DESC, p.sound_id LIMIT 30`).all(...args);
     const users = this.db.prepare(`SELECT p.user_id, COUNT(*) AS count, COUNT(DISTINCT p.sound_id) AS sounds
-      FROM plays p WHERE ${where} GROUP BY p.user_id ORDER BY count DESC, p.user_id LIMIT 10`).all(...args);
+      FROM plays p WHERE ${where} GROUP BY p.user_id ORDER BY count DESC, p.user_id LIMIT 30`).all(...args);
     return { ...summary, soundRows: sounds, userRows: users };
   }
   coverage(filter) {

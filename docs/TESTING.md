@@ -25,3 +25,19 @@
 | 音效顯示 | sounds 隱藏 ID 但同名音效仍分列；refresh 私人清單保留 ID 0 與完整 Snowflake、不混入其他伺服器的快取、部分／全部讀取失敗明確提示、過長清單以完整文字附件回覆 |
 
 整合測試使用已安裝 discord.js 的真實 Client 事件發射器與 SQLite，語音傳輸使用可控制的替身；不宣稱已完成 Discord Gateway、UDP、DAVE 握手或原生點擊實測。實機待驗項目見 [ACCEPTANCE.md](ACCEPTANCE.md)。
+
+## 本機移轉驗證：2026-10-22
+
+工作目錄：`C:\Howard_WorkSpace\Projects\DCbot\soundboard-tracker`。使用專案內 Node.js 24.22.1、pnpm 11.25.0；系統原有 Node.js 24.14.0 保持原樣。Node 下載包核對官方 SHA-256，pnpm 下載包核對 npm registry 的 SHA-512 integrity。
+
+- `dev.ps1 install`：依原始鎖定檔安裝成功，停用套件安裝腳本；`package.json` 與 `pnpm-lock.yaml` 未更動。
+- `dev.ps1 test`：28 項通過，0 失敗。
+- `dev.ps1 check`：語法、SDK、原生 AES 與 DAVE 0.1.12 通過。
+- `dev.ps1 demo`：3 次播放、2 秒已確認覆蓋；只使用記憶體資料庫。
+- `dev.ps1 audit`：npm 官方服務回報沒有已知漏洞；此結果僅代表查核當時的已知漏洞資料。
+- `.env` 必填欄位與格式通過，無額外或重複環境變數；未輸出任何設定值。資料庫路徑位於專案內，目前尚無舊資料庫。
+- Discord 官方 API 唯讀驗證：Bot Token 有效、Application ID 相符、可存取指定伺服器、`/soundboard` 已存在。未重新註冊指令，也未啟動 Gateway 或加入語音房。
+- 專案資料夾移除 Everyone、Users、Authenticated Users 存取規則，保留擁有者、管理員、系統與 Codex 工作環境權限；`.env`、原始碼權限已確認繼承此限制。
+- Windows PowerShell 5.1 的執行原則禁止 `.ps1`；維持原則不變，日常指令改為直接執行專案內 `node.exe`。`dev.ps1` 已在 PowerShell 7 驗證。
+
+正式啟動及 Discord 原生音效板實機測試由使用者在自己的 PowerShell 與 Discord 進行；請先停止其他電腦上使用相同 Token 的程序。

@@ -1,4 +1,4 @@
-import { ChannelType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder, escapeMarkdown } from 'discord.js';
+import { ChannelType, EmbedBuilder, MessageFlags, PermissionFlagsBits, RESTJSONErrorCodes, SlashCommandBuilder, escapeMarkdown } from 'discord.js';
 
 const filters = (sub, { withPublic = false } = {}) => {
   sub.addChannelOption(opt => opt.setName('channel').setDescription('指定語音頻道；省略則查詢你可檢視的語音頻道').addChannelTypes(ChannelType.GuildVoice));
@@ -30,16 +30,34 @@ export function queryFilter(interaction, now = Date.now()) {
 const stamp = ms => `<t:${Math.floor(ms / 1000)}:f>`;
 const label = row => row.name ? escapeMarkdown(row.name).slice(0, 70) : '未知／外部／已刪除音效';
 
-export function report(store, filter, mode, userId = null) {
-  const stats = store.stats(filter, { userId });
+async function trimMissingMembers(guild, rows) {
+  let end = rows.length;
+  while (end > 0) {
+    try {
+      // A missing or stale cache entry does not establish guild membership.
+      await guild.members.fetch({ user: rows[end - 1].user_id, force: true, cache: false });
+      break;
+    } catch (error) {
+      if (![RESTJSONErrorCodes.UnknownMember, RESTJSONErrorCodes.UnknownUser].includes(error?.code)) break;
+      end--;
+    }
+  }
+  return rows.slice(0, end);
+}
+
+export function report(store, filter, mode, userId = null, stats = store.stats(filter, { userId })) {
   const coverage = store.coverage(filter);
   const duration = Math.floor(coverage.reduce((sum, row) => sum + row.milliseconds, 0) / 1000);
   const coverageSummary = `已確認監測：${coverage.length} 個頻道，合計 ${duration} 秒。`;
   if (mode === 'sounds' || mode === 'users') {
+    const rows = mode === 'sounds'
+      ? stats.soundRows.slice(0, stats.soundRows.findLastIndex(row => row.name) + 1)
+      : stats.userRows;
     const ranking = stats.total === 0 ? ['此查詢範圍內尚無觀測紀錄。']
+      : rows.length === 0 ? ['此查詢範圍內沒有可顯示的排行項目。']
       : mode === 'sounds'
-        ? stats.soundRows.map((row, i) => `${i + 1}. ${label(row)}：${row.count} 次`)
-        : stats.userRows.map((row, i) => `${i + 1}. **<@${row.user_id}>**：${row.count} 次／${row.sounds} 個音效`);
+        ? rows.map((row, i) => `${i + 1}. ${label(row)}：${row.count} 次`)
+        : rows.map((row, i) => `${i + 1}. **<@${row.user_id}>**：${row.count} 次／${row.sounds} 個音效`);
     return [coverageSummary, '', ...ranking].join('\n');
   }
   const range = filter.since ? `${stamp(filter.since)} 至 ${stamp(filter.until)}` : `全部已儲存紀錄，截至 ${stamp(filter.until)}`;
@@ -84,6 +102,7 @@ export async function handleCommand(interaction, { client, voice, tracker, store
     }
     let content;
     let files;
+    let embeds;
     if (sub === 'join') {
       const channel = interaction.member.voice.channel;
       if (!channel) throw new Error('請先加入要監測的語音頻道。');
@@ -106,7 +125,17 @@ export async function handleCommand(interaction, { client, voice, tracker, store
     } else {
       tracker.checkpoint();
       const filter = queryFilter(interaction, now());
-      content = report(store, filter, sub, sub === 'users' ? interaction.options.getUser('user')?.id : null);
+      const userId = sub === 'users' ? interaction.options.getUser('user')?.id : null;
+      let stats;
+      if (sub === 'users') {
+        stats = store.stats(filter, { userId });
+        stats = { ...stats, userRows: await trimMissingMembers(interaction.guild, stats.userRows) };
+      }
+      content = report(store, filter, sub, userId, stats);
+      if (['sounds', 'users'].includes(sub) && content.length > 2000) {
+        embeds = [new EmbedBuilder().setDescription(content).toJSON()];
+        content = '';
+      }
       if (sub === 'status') {
         const target = voice.desired.get(interaction.guildId);
         const active = tracker.active.get(interaction.guildId);
@@ -114,7 +143,7 @@ export async function handleCommand(interaction, { client, voice, tracker, store
         content += `\n目前：${active ? `監測 ${describe(active.channelId)}` : '未監測'}；目標：${target ? describe(target) : '未設定'}。`;
       }
     }
-    await interaction.editReply({ content, ...(files ? { files } : {}), allowedMentions: { parse: [] } });
+    await interaction.editReply({ content, ...(files ? { files } : {}), ...(embeds ? { embeds } : {}), allowedMentions: { parse: [] } });
   } catch (error) {
     // Avoid exposing REST errors, payloads or tokens to a Discord response.
     const safe = error instanceof Error && error.message && /[\u3400-\u9fff]/u.test(error.message)
