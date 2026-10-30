@@ -74,15 +74,16 @@ export class Store {
     return { sql: `p.guild_id = ? AND p.channel_id IN (${channelIds.map(() => '?').join(',') || 'NULL'})
       AND p.received_at_ms >= ? AND p.received_at_ms <= ?`, args: [guildId, ...channelIds, since, until] };
   }
-  stats(filter, { userId = null } = {}) {
+  stats(filter, { userId = null, showUnknown = null } = {}) {
     const { sql, args } = this.scope(filter);
     const where = sql + (userId ? ' AND p.user_id = ?' : '');
     if (userId) args.push(userId);
     const summary = this.db.prepare(`SELECT COUNT(*) AS total, COUNT(DISTINCT p.user_id) AS users,
       COUNT(DISTINCT p.sound_id) AS sounds, COALESCE(SUM(p.timing = 'replay'),0) AS replay
       FROM plays p WHERE ${where}`).get(...args);
+    const soundWhere = where + (showUnknown === false ? " AND s.name IS NOT NULL AND s.name <> ''" : '');
     const sounds = this.db.prepare(`SELECT p.sound_id, s.name, COUNT(*) AS count
-      FROM plays p LEFT JOIN sounds s ON s.sound_id = p.sound_id WHERE ${where}
+      FROM plays p LEFT JOIN sounds s ON s.sound_id = p.sound_id WHERE ${soundWhere}
       GROUP BY p.sound_id ORDER BY count DESC, p.sound_id LIMIT 30`).all(...args);
     const users = this.db.prepare(`SELECT p.user_id, COUNT(*) AS count, COUNT(DISTINCT p.sound_id) AS sounds
       FROM plays p WHERE ${where} GROUP BY p.user_id ORDER BY count DESC, p.user_id LIMIT 30`).all(...args);

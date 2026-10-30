@@ -9,7 +9,8 @@ const filters = (sub, { withPublic = false } = {}) => {
 export const command = new SlashCommandBuilder().setName('soundboard').setDescription('原生音效板使用統計及監測範圍').setDMPermission(false)
   .addSubcommand(sub => sub.setName('join').setDescription('開始監測你所在的語音房（管理伺服器權限）'))
   .addSubcommand(sub => sub.setName('leave').setDescription('停止監測並取消自動重連（管理伺服器權限）'))
-  .addSubcommand(sub => filters(sub.setName('sounds').setDescription('已觀測音效播放次數排行榜'), { withPublic: true }))
+  .addSubcommand(sub => filters(sub.setName('sounds').setDescription('已觀測音效播放次數排行榜'), { withPublic: true })
+    .addBooleanOption(opt => opt.setName('show_unknown').setDescription('是否顯示未知／外部／已刪除音效；省略僅隱藏末尾未知項目')))
   .addSubcommand(sub => filters(sub.setName('users').setDescription('使用者排行或個人統計'), { withPublic: true })
     .addUserOption(opt => opt.setName('user').setDescription('指定使用者；省略則顯示排行')))
   .addSubcommand(sub => filters(sub.setName('status').setDescription('查詢監測範圍、期間及缺口')))
@@ -45,14 +46,17 @@ async function trimMissingMembers(guild, rows) {
   return rows.slice(0, end);
 }
 
-export function report(store, filter, mode, userId = null, stats = store.stats(filter, { userId })) {
+export function report(store, filter, mode, userId = null, { showUnknown = null, stats } = {}) {
+  stats ??= store.stats(filter, { userId, showUnknown: mode === 'sounds' ? showUnknown : null });
   const coverage = store.coverage(filter);
   const duration = Math.floor(coverage.reduce((sum, row) => sum + row.milliseconds, 0) / 1000);
   const coverageSummary = `已確認監測：${coverage.length} 個頻道，合計 ${duration} 秒。`;
   if (mode === 'sounds' || mode === 'users') {
-    const rows = mode === 'sounds'
-      ? stats.soundRows.slice(0, stats.soundRows.findLastIndex(row => row.name) + 1)
-      : stats.userRows;
+    let rows = mode === 'sounds' ? stats.soundRows : stats.userRows;
+    if (mode === 'sounds' && showUnknown !== true) {
+      rows = showUnknown === false ? rows.filter(row => row.name)
+        : rows.slice(0, rows.findLastIndex(row => row.name) + 1);
+    }
     const ranking = stats.total === 0 ? ['此查詢範圍內尚無觀測紀錄。']
       : rows.length === 0 ? ['此查詢範圍內沒有可顯示的排行項目。']
       : mode === 'sounds'
@@ -126,12 +130,13 @@ export async function handleCommand(interaction, { client, voice, tracker, store
       tracker.checkpoint();
       const filter = queryFilter(interaction, now());
       const userId = sub === 'users' ? interaction.options.getUser('user')?.id : null;
+      const showUnknown = sub === 'sounds' ? interaction.options.getBoolean('show_unknown') : null;
       let stats;
       if (sub === 'users') {
         stats = store.stats(filter, { userId });
         stats = { ...stats, userRows: await trimMissingMembers(interaction.guild, stats.userRows) };
       }
-      content = report(store, filter, sub, userId, stats);
+      content = report(store, filter, sub, userId, { stats, showUnknown });
       if (['sounds', 'users'].includes(sub) && content.length > 2000) {
         embeds = [new EmbedBuilder().setDescription(content).toJSON()];
         content = '';

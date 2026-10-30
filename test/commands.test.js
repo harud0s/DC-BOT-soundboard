@@ -12,13 +12,20 @@ test('command payload validates and bounds date filters', () => {
   assert.equal(data.dm_permission, false);
   for (const name of ['sounds', 'users']) {
     const options = data.options.find(o => o.name === name).options;
-    assert.deepEqual(options.map(o => o.name), ['channel', 'public', 'days', ...(name === 'users' ? ['user'] : [])]);
+    assert.deepEqual(options.map(o => o.name), ['channel', 'public', 'days', name === 'users' ? 'user' : 'show_unknown']);
     assert.equal(options[1].type, 5);
     assert.equal(options[1].required, false);
     assert.equal(options.find(o => o.name === 'days').max_value, 365);
+    if (name === 'sounds') {
+      assert.equal(options[3].type, 5);
+      assert.equal(options[3].required, false);
+    }
   }
   for (const sub of data.options.filter(o => !['sounds', 'users'].includes(o.name))) {
     assert.equal(sub.options.some(o => o.name === 'public'), false);
+  }
+  for (const sub of data.options.filter(o => o.name !== 'sounds')) {
+    assert.equal(sub.options.some(o => o.name === 'show_unknown'), false);
   }
 });
 test('empty reports describe missing observations instead of zero global use', t => {
@@ -32,7 +39,7 @@ test('empty reports describe missing observations instead of zero global use', t
   assert.match(detailed, /未知，不代表零使用/); assert.match(detailed, /原始播放時間未知/);
 });
 
-test('sound rankings omit trailing unknown sounds while preserving earlier rows and stored statistics', t => {
+test('sound visibility can include all unknowns, hide all unknowns, or retain the default without changing privacy', async t => {
   const store = new Store(); t.after(() => store.close());
   store.upsertSound('7', 'ba dum tss');
   store.upsertSound('8', 'ba dum tss');
@@ -45,10 +52,58 @@ test('sound rankings omit trailing unknown sounds while preserving earlier rows 
   assert.equal(text, '已確認監測：0 個頻道，合計 0 秒。\n\n1. 未知／外部／已刪除音效：1 次\n2. ba dum tss：1 次\n3. ba dum tss：1 次');
   assert.equal(store.stats(filter).total, 5);
   assert.equal(store.stats(filter).soundRows.length, 5);
+  const context = { store, tracker: new Tracker(store), now: () => 1000 };
+  const summary = '已確認監測：0 個頻道，合計 0 秒。\n\n';
+  for (const [showUnknown, expected] of [
+    [null, text],
+    [true, summary + '1. 未知／外部／已刪除音效：1 次\n2. ba dum tss：1 次\n3. ba dum tss：1 次\n4. 未知／外部／已刪除音效：1 次\n5. 未知／外部／已刪除音效：1 次'],
+    [false, summary + '1. ba dum tss：1 次\n2. ba dum tss：1 次'],
+  ]) {
+    for (const publicChoice of [null, false, true]) {
+      const query = interaction('sounds', false, publicChoice, showUnknown);
+      query.guild.channels.cache.set('2', { id: '2', type: ChannelType.GuildVoice, permissionsFor: () => ({ has: () => true }) });
+      await handleCommand(query, context);
+      assert.equal(query.replies[0].flags, publicChoice === true ? undefined : MessageFlags.Ephemeral);
+      assert.equal(query.replies[1].content, expected);
+      assert.deepEqual(query.replies[1].allowedMentions, { parse: [] });
+    }
+  }
   store.upsertSound('7', '');
   store.upsertSound('8', '');
   assert.equal(report(store, filter, 'sounds'), '已確認監測：0 個頻道，合計 0 秒。\n\n此查詢範圍內沒有可顯示的排行項目。');
   assert.match(report(store, filter, 'status'), /已記錄 5 次/);
+  assert.equal(report(store, filter, 'sounds', null, { showUnknown: false }), summary + '此查詢範圍內沒有可顯示的排行項目。');
+  assert.equal(report(store, filter, 'sounds', null, { showUnknown: true }).match(/^\d+\. /gm).length, 5);
+});
+
+test('hiding unknown sounds fills all 30 places from named sounds without filtering totals or users', async t => {
+  const store = new Store(); t.after(() => store.close());
+  let sequence = 0;
+  const play = soundId => store.record({ sessionKey: 'known-ranking', sequence: sequence++, guildId: '1', channelId: '2',
+    userId: '3', soundId, receivedAt: 100, timing: 'live' });
+  for (let i = 0; i < 31; i++) {
+    const soundId = String(100 + i);
+    store.upsertSound(soundId, `音效${i + 1}`);
+    play(soundId);
+  }
+  store.upsertSound('901', '');
+  for (const soundId of ['900', '900', '901', '901']) play(soundId);
+  const filter = { guildId: '1', channelIds: ['2'], until: 1000 };
+  const all = store.stats(filter);
+  const known = store.stats(filter, { showUnknown: false });
+  assert.equal(known.soundRows.length, 30);
+  assert.equal(known.soundRows.at(-1).sound_id, '129');
+  assert.equal(all.soundRows.at(-1).sound_id, '127');
+  assert.equal(known.total, 35);
+  assert.equal(known.sounds, 33);
+  assert.deepEqual(known.userRows, all.userRows);
+  const query = interaction('sounds', false, null, false);
+  query.guild.channels.cache.set('2', { id: '2', type: ChannelType.GuildVoice, permissionsFor: () => ({ has: () => true }) });
+  await handleCommand(query, { store, tracker: new Tracker(store), now: () => 1000 });
+  assert.match(query.replies[1].content, /\n1\. 音效1：1 次\n/);
+  assert.match(query.replies[1].content, /\n30\. 音效30：1 次$/);
+  assert.doesNotMatch(query.replies[1].content, /未知／外部／已刪除音效/);
+  assert.equal(store.stats(filter).total, 35);
 });
 test('queries exclude hidden voice channels', () => {
   const channel = (id, visible) => ({ id, type: ChannelType.GuildVoice, permissionsFor: () => ({ has: () => visible }) });
@@ -122,13 +177,13 @@ test('config requires token and validates registration and restore flag', () => 
   assert.throws(() => readConfig({ DISCORD_TOKEN: 'fixture', AUTO_REJOIN: 'typo' }), /AUTO_REJOIN/);
   assert.equal(readConfig({ DISCORD_TOKEN: 'fixture', AUTO_REJOIN: 'false' }).autoRejoin, false);
 });
-function interaction(sub, admin = false, publicChoice = null) {
+function interaction(sub, admin = false, publicChoice = null, showUnknown = null) {
   const replies = [];
   return { replies, isChatInputCommand: () => true, commandName: 'soundboard', inCachedGuild: () => true,
     guildId: '1', guild: { channels: { cache: new Map() }, members: { fetch: async ({ user }) => ({ id: user }) } }, member: { voice: {} },
     memberPermissions: new PermissionsBitField(admin ? PermissionFlagsBits.ManageGuild : 0n),
     options: { getSubcommand: () => sub, getChannel: () => null, getInteger: () => null, getUser: () => null,
-      getBoolean: () => publicChoice },
+      getBoolean: name => name === 'public' ? publicChoice : name === 'show_unknown' ? showUnknown : null },
     deferReply: async opts => replies.push(opts), editReply: async opts => replies.push(opts) };
 }
 
